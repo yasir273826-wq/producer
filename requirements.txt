@@ -1,0 +1,4 @@
+yt-dlp>=2024.4.9
+yt-dlp-ejs>=0.8.0
+google-api-python-client>=2.126.0
+supabase>=2.4.0

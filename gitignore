@@ -1,0 +1,20 @@
+# Credential files written from secrets at runtime — always cleaned up
+# explicitly in code/workflow, but ignored here as a defense-in-depth
+# safety net in case a step fails before cleanup runs.
+youtube_cookies.txt
+tiktok_cookies.json
+
+# Local working directories — never meant to be committed.
+downloads/
+__pycache__/
+*.pyc
+
+# Debug screenshots (uploaded as workflow artifacts instead, not committed).
+tiktok_debug_screenshot.png
+tiktok_post_button_debug.png
+
+# Temporary download/clip dirs (all state now in Supabase, not git)
+downloads/
+clips/
+state.json
+youtube_cookies.txt
