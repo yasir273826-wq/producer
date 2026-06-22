@@ -1,0 +1,99 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# .github/workflows/main.yml  — PRODUCER REPO (Account A)
+#
+# Runs once a day at 03:00 AM PKT (22:00 UTC previous day).
+# Downloads YouTube videos, splits into clips, uploads to Supabase Storage,
+# writes metadata to Supabase DB. Does NOT touch TikTok.
+#
+# REQUIRED SECRETS  (Settings → Secrets → Actions in Producer Repo)
+# ─────────────────
+#   SUPABASE_URL          – https://yourproject.supabase.co
+#   SUPABASE_SERVICE_KEY  – service_role key (NOT the anon key)
+#   YOUTUBE_API_KEY       – YouTube Data API v3 key
+#   YOUTUBE_COOKIES_JSON  – JSON array of YouTube session cookies
+#
+# REQUIRED VARIABLES  (Settings → Variables → Actions)
+# ───────────────────
+#   YT_CHANNEL            – e.g. "@somechannel"
+#
+# OPTIONAL VARIABLES
+# ──────────────────
+#   MAX_VIDEOS_PER_RUN    – default 5
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: "Producer · Download & Split"
+
+on:
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: "Force-run producer manually (true/false)"
+        required: false
+        default: "true"
+  schedule:
+    # Once daily at 03:00 AM PKT == 22:00 UTC previous day
+    - cron: "0 22 * * *"
+
+jobs:
+  producer:
+    name: "Producer · Download & Split"
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    # Only one producer at a time; don't cancel in-progress (mid-download)
+    concurrency:
+      group: "producer-pipeline"
+      cancel-in-progress: false
+
+    env:
+      YT_CHANNEL: ${{ vars.YT_CHANNEL }}
+      MAX_VIDEOS_PER_RUN: ${{ vars.MAX_VIDEOS_PER_RUN || '5' }}
+
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "Set up Python 3.11"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: "Install FFmpeg + DejaVu fonts"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fontconfig
+          sudo fc-cache -f -v
+          fc-list | grep -i dejavu | head -3
+
+      - name: "Install Deno (required for yt-dlp n-challenge)"
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: "Verify Deno is on PATH"
+        run: deno --version
+
+      - name: "Install Python dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "Validate required configuration"
+        run: |
+          if [ -z "${YT_CHANNEL}" ]; then
+            echo "::error::YT_CHANNEL variable is not set (Settings → Variables → Actions)."
+            exit 1
+          fi
+          echo "Channel: ${YT_CHANNEL}"
+          echo "Max videos per run: ${MAX_VIDEOS_PER_RUN}"
+
+      - name: "Run producer.py"
+        env:
+          PYTHONUNBUFFERED: "1"
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          YOUTUBE_COOKIES_JSON: ${{ secrets.YOUTUBE_COOKIES_JSON }}
+        run: python producer.py
