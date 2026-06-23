@@ -3,10 +3,10 @@ producer.py  (Producer Repo — Account A)
 ─────────────────────────────────────────────────────────────────────────────
 Runs ONCE PER DAY via GitHub Actions cron (03:00 AM PKT).
 
-Architecture change: state.json → Supabase
-  - processed video IDs  → processed_videos table
-  - clip metadata        → clips table
-  - clip .mp4 files      → Supabase Storage bucket "clips"
+Architecture: Supabase Postgres (metadata) + Backblaze B2 (clip files)
+  - processed video IDs  → processed_videos table (Supabase)
+  - clip metadata        → clips table (Supabase)
+  - clip .mp4 files      → Backblaze B2 bucket (S3-compatible API)
   - daily slot log       → daily_slots table  (managed by uploader repo)
 
 This script does NOT upload anything to TikTok — that's uploader.py's job
@@ -14,7 +14,11 @@ in the separate Uploader Repo (Account B).
 
 Env vars expected (GitHub Secrets — Producer Repo):
   SUPABASE_URL          – https://yourproject.supabase.co
-  SUPABASE_SERVICE_KEY  – service_role key (full DB + Storage access)
+  SUPABASE_SERVICE_KEY  – service_role key (DB access)
+  B2_ENDPOINT_URL       – Backblaze B2 S3-compatible endpoint
+  B2_KEY_ID             – Backblaze Application Key ID
+  B2_APPLICATION_KEY    – Backblaze Application Key secret
+  B2_BUCKET_NAME        – Backblaze bucket name for clip files
   YOUTUBE_API_KEY       – YouTube Data API v3 key
   YOUTUBE_COOKIES_JSON  – JSON array of YouTube session cookies
   YOUTUBE_COOKIES_TXT   – alternative: raw Netscape cookies.txt (fallback)
@@ -32,6 +36,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import b2_client
 import supabase_client as sc
 import youtube_api
 
@@ -262,10 +267,10 @@ def render_clip_with_overlay(
         return False
 
 
-def process_video(sb, video_id: str) -> int:
+def process_video(sb, b2, video_id: str) -> int:
     """
     Download one video, split into clips with overlays, upload each clip
-    to Supabase Storage, and insert a DB row for each clip.
+    to Backblaze B2, and insert a DB row (Supabase) for each clip.
     Returns the number of clips successfully created.
     """
     print(f"\n📥 Downloading {video_id} ...", flush=True)
@@ -306,12 +311,12 @@ def process_video(sb, video_id: str) -> int:
         if not ok:
             continue
 
-        # Upload rendered clip to Supabase Storage
-        print(f"  ☁️  Uploading {clip_id} to Supabase Storage...", flush=True)
+        # Upload rendered clip to Backblaze B2
+        print(f"  ☁️  Uploading {clip_id} to Backblaze B2...", flush=True)
         try:
-            sc.upload_clip_to_storage(sb, str(local_path), storage_path)
+            b2_client.upload_clip_to_storage(b2, str(local_path), storage_path)
         except Exception as e:
-            print(f"  ❌ Storage upload failed for {clip_id}: {e}")
+            print(f"  ❌ B2 upload failed for {clip_id}: {e}")
             local_path.unlink(missing_ok=True)
             continue
 
@@ -329,9 +334,9 @@ def process_video(sb, video_id: str) -> int:
             local_path.unlink(missing_ok=True)
             continue
 
-        # Clean up local rendered file — it now lives in Supabase Storage
+        # Clean up local rendered file — it now lives in Backblaze B2
         local_path.unlink(missing_ok=True)
-        print(f"  ✅ {clip_id} stored in Supabase.")
+        print(f"  ✅ {clip_id} stored in B2.")
         created += 1
 
     # Clean up the raw downloaded source
@@ -353,6 +358,14 @@ def main() -> None:
         print("::error::SUPABASE_URL and SUPABASE_SERVICE_KEY must both be set as Secrets. Aborting.")
         sys.exit(1)
 
+    missing_b2 = [
+        var for var in ("B2_ENDPOINT_URL", "B2_KEY_ID", "B2_APPLICATION_KEY", "B2_BUCKET_NAME")
+        if not os.environ.get(var, "").strip()
+    ]
+    if missing_b2:
+        print(f"::error::Missing Backblaze B2 secrets/vars: {', '.join(missing_b2)}. Aborting.")
+        sys.exit(1)
+
     if not write_cookies_file():
         print("::error::No YouTube cookies available — downloads will fail. Aborting.")
         sys.exit(1)
@@ -365,6 +378,7 @@ def main() -> None:
 
 def _run_pipeline(channel: str) -> None:
     sb = sc.get_client()
+    b2 = b2_client.get_client()
 
     print(f"🔎 Fetching video list for channel: {channel}")
     candidates = get_new_videos_via_api(channel)
@@ -408,7 +422,7 @@ def _run_pipeline(channel: str) -> None:
         elif fast_path_active and i == len(fast_path_videos):
             print(f"\n▶️  Fast-path done — continuing normal batch.")
 
-        clips_made = process_video(sb, video_id)
+        clips_made = process_video(sb, b2, video_id)
         total_new_clips += clips_made
 
         # Mark processed regardless of clip count (so broken videos aren't retried)

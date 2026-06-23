@@ -6,21 +6,22 @@ and the uploader repo.  Both repos are separate GitHub repos with no shared
 import path, so the only safe way to share code is to literally duplicate
 this file.
 
-Wraps every database and storage operation the pipeline needs via the
-official `supabase-py` library (REST + realtime client).
+Wraps every DATABASE (metadata-only) operation the pipeline needs via the
+official `supabase-py` library. Clip .mp4 file storage has moved to
+Backblaze B2 — see b2_client.py. This file no longer touches Supabase
+Storage at all; Supabase is now Postgres-only for this pipeline.
 
 Env vars required (set as GitHub Secrets in both repos):
   SUPABASE_URL          – Project URL, e.g. https://xyzxyz.supabase.co
-  SUPABASE_SERVICE_KEY  – service_role key (full DB + Storage access)
+  SUPABASE_SERVICE_KEY  – service_role key (full DB access)
                           ⚠️  Never commit this — add to GitHub Secrets only.
 
 Tables (see schema.sql):
   processed_videos  – one row per YouTube video ID that has been downloaded
-  clips             – one row per rendered clip (pending/uploaded)
+  clips             – one row per rendered clip (pending/uploaded);
+                      storage_path now refers to an object key in the
+                      Backblaze B2 bucket, not Supabase Storage.
   daily_slots       – one row per (date, slot) pair, the double-upload guard
-
-Storage bucket:
-  clips             – raw .mp4 files, one object per clip_id
 """
 
 import os
@@ -38,8 +39,6 @@ TARGET_SLOTS = [
     ("06:00_PM", 18, 0),
     ("09:00_PM", 21, 0),
 ]
-
-STORAGE_BUCKET = "clips"
 
 
 def get_client() -> Client:
@@ -206,38 +205,3 @@ def ensure_today_slots(sb: Client) -> None:
         for slot_name, _, _ in TARGET_SLOTS
     ]
     sb.table("daily_slots").upsert(rows, ignore_duplicates=True).execute()
-
-
-# ─── Supabase Storage (clips bucket) ─────────────────────────────────────────
-
-def upload_clip_to_storage(sb: Client, local_path: str, storage_path: str) -> str:
-    """
-    Upload a local .mp4 file to the 'clips' Storage bucket.
-    Returns the storage_path (used as the DB foreign key).
-    """
-    with open(local_path, "rb") as f:
-        data = f.read()
-    sb.storage.from_(STORAGE_BUCKET).upload(
-        path=storage_path,
-        file=data,
-        file_options={"content-type": "video/mp4", "upsert": "true"},
-    )
-    return storage_path
-
-
-def download_clip_from_storage(sb: Client, storage_path: str, local_path: str) -> None:
-    """
-    Download a clip from Storage to a local path.
-    Raises on failure.
-    """
-    data = sb.storage.from_(STORAGE_BUCKET).download(storage_path)
-    with open(local_path, "wb") as f:
-        f.write(data)
-
-
-def delete_clip_from_storage(sb: Client, storage_path: str) -> None:
-    """Delete a clip object from Storage (called after successful upload to TikTok)."""
-    try:
-        sb.storage.from_(STORAGE_BUCKET).remove([storage_path])
-    except Exception as e:
-        print(f"  ⚠️  Could not delete {storage_path} from storage: {e}")
