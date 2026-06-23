@@ -422,11 +422,13 @@ def _run_pipeline(channel: str) -> None:
         elif fast_path_active and i == len(fast_path_videos):
             print(f"\n▶️  Fast-path done — continuing normal batch.")
 
+        # Mark processed FIRST — clips.source_video_id has a foreign key
+        # constraint against processed_videos, so the parent row must exist
+        # before process_video() tries to insert any clip rows for it.
+        sc.mark_video_processed(sb, video_id)
+
         clips_made = process_video(sb, b2, video_id)
         total_new_clips += clips_made
-
-        # Mark processed regardless of clip count (so broken videos aren't retried)
-        sc.mark_video_processed(sb, video_id)
 
         if fast_path_active and i < len(fast_path_videos):
             new_pending = sc.count_pending_clips(sb)
