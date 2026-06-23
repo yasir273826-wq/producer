@@ -2,13 +2,17 @@
 # .github/workflows/main.yml  — PRODUCER REPO (Account A)
 #
 # Runs once a day at 03:00 AM PKT (22:00 UTC previous day).
-# Downloads YouTube videos, splits into clips, uploads to Supabase Storage,
+# Downloads YouTube videos, splits into clips, uploads to Backblaze B2,
 # writes metadata to Supabase DB. Does NOT touch TikTok.
 #
 # REQUIRED SECRETS  (Settings → Secrets → Actions in Producer Repo)
 # ─────────────────
 #   SUPABASE_URL          – https://yourproject.supabase.co
 #   SUPABASE_SERVICE_KEY  – service_role key (NOT the anon key)
+#   B2_ENDPOINT_URL        – Backblaze B2 S3-compatible endpoint
+#   B2_KEY_ID               – Backblaze Application Key ID
+#   B2_APPLICATION_KEY      – Backblaze Application Key secret
+#   B2_BUCKET_NAME          – Backblaze bucket name for clip files
 #   YOUTUBE_API_KEY       – YouTube Data API v3 key
 #   YOUTUBE_COOKIES_JSON  – JSON array of YouTube session cookies
 #
@@ -94,6 +98,10 @@ jobs:
           PYTHONUNBUFFERED: "1"
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          B2_ENDPOINT_URL: ${{ secrets.B2_ENDPOINT_URL }}
+          B2_KEY_ID: ${{ secrets.B2_KEY_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.B2_APPLICATION_KEY }}
+          B2_BUCKET_NAME: ${{ secrets.B2_BUCKET_NAME }}
           YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
           YOUTUBE_COOKIES_JSON: ${{ secrets.YOUTUBE_COOKIES_JSON }}
         run: python producer.py
